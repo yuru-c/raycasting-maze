@@ -1,90 +1,143 @@
 const canvas = document.getElementById('view');
 const ctx = canvas.getContext('2d');
 
-// --- 1. 地圖定義 ---
+// 1. 地圖：1是牆，0是路
 const map = [
-    [1, 1, 1, 1, 1, 1, 1, 1],
-    [1, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 1, 0, 0, 1, 0, 1],
-    [1, 0, 1, 0, 0, 1, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 1],
-    [1, 1, 1, 1, 1, 1, 1, 1]
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 1, 1, 0, 0, 1, 1, 0, 1],
+    [1, 0, 1, 0, 0, 0, 0, 1, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 ];
-const TILE_SIZE = 64; // 地圖每一格的大小
+const TILE_SIZE = 64;
 
-// --- 2. 玩家狀態 ---
+// 2. 玩家狀態
 let player = {
-    x: 150,
-    y: 150,
-    angle: 0,      // 玩家面對的角度（0 弧度是正右方）
-    fov: Math.PI / 3 // 視角範圍（Field of View）視角 60 度
+    x: 80,
+    y: 80,
+    angle: 0
 };
 
-// --- 3. 渲染主程式 ---
+// 3. 鍵盤狀態
+const keys = {}; // 建立一個儲存箱，用來記住現在哪些按鍵被按住了。
+window.onkeydown = (e) => keys[e.key.toLowerCase()] = true; // 按下鍵盤，記為「true」（正在按）。
+window.onkeyup = (e) => keys[e.key.toLowerCase()] = false; // 放開鍵盤，記為「false」（沒在按）。
+
+// 點擊畫布時，請求鎖定滑鼠 (按 Esc 退出)
+canvas.addEventListener('click', () => {
+    canvas.requestPointerLock();
+});
+
+// 當滑鼠移動時，改變玩家角度
+document.addEventListener('mousemove', (e) => {
+    if (document.pointerLockElement === canvas) {
+        // e.movementX 是滑鼠左右移動的距離
+        // 0.002 是靈敏度，你可以調整這個數值
+        player.angle += e.movementX * 0.002;
+        // 讓角度永遠維持在 0 到 2*PI 之間，就像時鐘轉完一圈回到 0
+        player.angle %= Math.PI * 2;
+    }
+});
+
 function render() {
-    // A. 清空畫布
+    // 預計移動後的 X 和 Y 座標
+    let nextX = player.x;
+    let nextY = player.y;
+
+    if (keys['w']) {
+        nextX += Math.cos(player.angle) * 3;
+        nextY += Math.sin(player.angle) * 3;
+    }
+    if (keys['s']) {
+        nextX -= Math.cos(player.angle) * 3;
+        nextY -= Math.sin(player.angle) * 3;
+    }
+
+    // --- 碰撞檢查的核心 ---
+    // 1. 把預計的座標換算成地圖格子 (mX, mY)
+    let mX = Math.floor(nextX / TILE_SIZE);
+    let mY = Math.floor(nextY / TILE_SIZE);
+
+    // 2. 檢查那一格是不是空地 (0)
+    // 我們同時檢查 X 方向與 Y 方向，確保不會走出地圖邊界
+    if (map[mY] && map[mY][mX] === 0) {
+        player.x = nextX;
+        player.y = nextY;
+    }
+
+    // 分開檢查 X，如果 X 沒撞牆，就更新 X
+    let checkX = Math.floor(nextX / TILE_SIZE);
+    let currentY = Math.floor(player.y / TILE_SIZE);
+    if (map[currentY][checkX] === 0) {
+        player.x = nextX;
+    }
+
+    // 分開檢查 Y，如果 Y 沒撞牆，就更新 Y
+    let checkY = Math.floor(nextY / TILE_SIZE);
+    let currentX = Math.floor(player.x / TILE_SIZE);
+    if (map[checkY][currentX] === 0) {
+        player.y = nextY;
+    }
+
+    if (keys['a']) player.angle -= 0.05;
+    if (keys['d']) player.angle += 0.05;
+
+    // --- 開始繪圖 ---
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // B. 畫出 2D 地圖 (用於開發除錯)
-    drawMap();
+    // 畫天花板(深灰)與地板(淺灰)
+    ctx.fillStyle = "#222"; ctx.fillRect(0, 0, canvas.width, canvas.height/2);
+    ctx.fillStyle = "#555"; ctx.fillRect(0, canvas.height/2, canvas.width, canvas.height/2);
 
-    // C. 發射射線 (Raycasting 核心)
-    castRays();
+    // 核心：發射射線
+    const numRays = 160; // 畫面由 160 根柱子組成
+    for (let i = 0; i < numRays; i++) {
+        // 計算這一條射線的角度（從玩家視野的左邊掃到右邊）
+        let rayAngle = (player.angle - 0.5) + (i / numRays);
+        let rayX = player.x;
+        let rayY = player.y;
+        let dist = 0;
 
-    requestAnimationFrame(render);
-}
+        // 射線往前跑，直到撞到地圖上的 1
+        while (dist < 500) {
+            dist += 2;
+            let testX = rayX + Math.cos(rayAngle) * dist;
+            let testY = rayY + Math.sin(rayAngle) * dist;
+            
+            let mX = Math.floor(testX / TILE_SIZE);
+            let mY = Math.floor(testY / TILE_SIZE);
 
-function drawMap() {
-    for (let row = 0; row < map.length; row++) {
-        for (let col = 0; col < map[row].length; col++) {
-            if (map[row][col] === 1) {
-                ctx.fillStyle = "#555"; // 牆壁灰色
-                ctx.fillRect(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE - 1, TILE_SIZE - 1);
+            if (map[mY][mX] === 1) {
+                // 撞牆了！算出牆的高度
+                let h = (TILE_SIZE * canvas.height) / (dist * Math.cos(player.angle - rayAngle));
+                
+                // 距離越遠，顏色越黑
+                let c = 200 - (dist / 2);
+                ctx.fillStyle = `rgb(${c}, ${c}, ${c})`;
+                ctx.fillRect(i * (canvas.width/numRays), (canvas.height - h)/2, (canvas.width/numRays) + 1, h);
+                break;
             }
         }
     }
+
+    // 畫左上角的小地圖
+    drawMiniMap();
+    requestAnimationFrame(render);
 }
 
-function castRays() {
-    // 先畫出玩家本人 (一個紅點)
-    ctx.fillStyle = "red";
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, 5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 發射一條測試射線
-    let rayX = player.x;
-    let rayY = player.y;
-    let stepX = Math.cos(player.angle); // 根據角度算出 X 軸每一步要走多少
-    let stepY = Math.sin(player.angle); // 根據角度算出 Y 軸每一步要走多少
-
-    // 讓射線一直往前跑，直到撞牆
-    while (true) {
-        rayX += stepX;
-        rayY += stepY;
-        
-        let mapX = Math.floor(rayX / TILE_SIZE);
-        let mapY = Math.floor(rayY / TILE_SIZE);
-
-        if (map[mapY][mapX] === 1) break; // 撞到牆了，停止
-
-        // 畫出射線的路徑 (除錯用)
-        ctx.fillStyle = "yellow";
-        ctx.fillRect(rayX, rayY, 2, 2);
+function drawMiniMap() {
+    const s = 0.1; // 縮放比例
+    for(let y=0; y<map.length; y++) {
+        for(let x=0; x<map[y].length; x++) {
+            if(map[y][x] === 1) {
+                ctx.fillStyle = "white";
+                ctx.fillRect(x*TILE_SIZE*s, y*TILE_SIZE*s, TILE_SIZE*s-1, TILE_SIZE*s-1);
+            }
+        }
     }
+    ctx.fillStyle = "red";
+    ctx.fillRect(player.x*s-2, player.y*s-2, 4, 4);
 }
 
 render();
-
-window.addEventListener('keydown', (e) => {
-    if (e.key === 'a') player.angle -= 0.1; // 向左轉
-    if (e.key === 'd') player.angle += 0.1; // 向右轉
-    if (e.key === 'w') { // 向前走
-        player.x += Math.cos(player.angle) * 5;
-        player.y += Math.sin(player.angle) * 5;
-    }
-    if (e.key === 's') { // 向後退
-        player.x -= Math.cos(player.angle) * 5;
-        player.y -= Math.sin(player.angle) * 5;
-    }
-});
