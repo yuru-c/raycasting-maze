@@ -54,18 +54,6 @@ function render() {
         nextY -= Math.sin(player.angle) * 3;
     }
 
-    // --- 碰撞檢查的核心 ---
-    // 1. 把預計的座標換算成地圖格子 (mX, mY)
-    let mX = Math.floor(nextX / TILE_SIZE);
-    let mY = Math.floor(nextY / TILE_SIZE);
-
-    // 2. 檢查那一格是不是空地 (0)
-    // 我們同時檢查 X 方向與 Y 方向，確保不會走出地圖邊界
-    if (map[mY] && map[mY][mX] === 0) {
-        player.x = nextX;
-        player.y = nextY;
-    }
-
     // 分開檢查 X，如果 X 沒撞牆，就更新 X
     let checkX = Math.floor(nextX / TILE_SIZE);
     let currentY = Math.floor(player.y / TILE_SIZE);
@@ -101,7 +89,7 @@ function render() {
 
         // 射線往前跑，直到撞到地圖上的 1
         while (dist < 500) {
-            dist += 2;
+            dist += 0.5;
             let testX = rayX + Math.cos(rayAngle) * dist;
             let testY = rayY + Math.sin(rayAngle) * dist;
             
@@ -109,14 +97,34 @@ function render() {
             let mY = Math.floor(testY / TILE_SIZE);
 
             if (map[mY][mX] === 1) {
-                // 撞牆了！算出牆的高度
+                // 撞牆了！算出牆的高度（已修正魚眼失真）
                 let h = (TILE_SIZE * canvas.height) / (dist * Math.cos(player.angle - rayAngle));
                 
-                // 距離越遠，顏色越黑
-                let c = 200 - (dist / 2);
-                ctx.fillStyle = `rgb(${c}, ${c}, ${c})`;
-                ctx.fillRect(i * (canvas.width/numRays), (canvas.height - h)/2, (canvas.width/numRays) + 1, h);
-                break;
+                // 1. 取得撞擊點在單一格子內的相對位置 (用來判斷撞到哪一面)
+                let blockX = testX % TILE_SIZE; 
+                let blockY = testY % TILE_SIZE;
+
+                // 2. 根據距離計算基礎亮度（線性霧化：越遠越黑）
+                let colorValue = 200 - (dist / 2);
+
+                // 3. 判斷撞擊方位並套用陰影
+                // 如果撞擊點在 X 邊界（左右兩側），則調暗顏色
+                if (Math.abs(blockX) < 2 || Math.abs(blockX) > TILE_SIZE - 2) {
+                    colorValue *= 0.7; 
+                }
+
+                // 4. 正式套用顏色與畫出柱子
+                ctx.fillStyle = `rgb(${colorValue}, ${colorValue}, ${colorValue})`;
+                
+                // 這裡使用剛剛計算好、含陰影的 colorValue
+                ctx.fillRect(
+                    i * (canvas.width / numRays), // 螢幕上的 X 位置
+                    (canvas.height - h) / 2,      // 繪製起點（置中）
+                    (canvas.width / numRays) + 1, // 柱子寬度（+1 避免縫隙）
+                    h                             // 牆壁高度
+                );
+                
+                break; // 停止射線步進
             }
         }
     }
